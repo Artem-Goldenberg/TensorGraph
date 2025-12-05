@@ -1,0 +1,87 @@
+# ---------------------------
+# Build artifacts
+# ---------------------------
+build/
+build-*/
+out/
+bin/
+lib/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+
+# Ninja
+.ninja_deps
+.ninja_log
+
+# ---------------------------
+# CUDA / NVCC
+# ---------------------------
+*.ptx
+*.cubin
+*.fatbin
+*.sass
+*.luac
+*.gpu
+*.sass
+*.module_id
+*.nvvm
+*.ll
+
+# nvcc temporary files
+*.i
+*.ii
+*.cudafe*
+*.cudafe1.*
+*.cudafe2.*
+*.cpp1.*
+*.cpp2.*
+*.module_id
+
+# CUDA cache
+*.nvprof
+*.nsys-rep
+*.nvvp
+
+# ---------------------------
+# Compiled objects
+# ---------------------------
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# clangd / ccls
+compile_commands.json
+.cache/
+.clangd/
+.ccls-cache/
+
+# ---------------------------
+# IDE / Editor
+# ---------------------------
+# VS Code
+.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# ---------------------------
+# Misc
+# ---------------------------
+trash.txt
+suggested.cpp
+*.log
+*.tmp
+*.bak
+*.old
+*.DS_Store
