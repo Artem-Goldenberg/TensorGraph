@@ -12,27 +12,30 @@ enum class dtype_t {
     Int32, Float32, Float64
 };
 
-
 struct Shape {
     Shape() {}
     Shape(std::initializer_list<size_t> dims): dims(dims) {}
     Shape(std::vector<size_t> dims): dims(dims) {}
 
-    size_t operator[] (int index) const {
+    constexpr size_t ndims() const {
+        return dims.size();
+    }
+
+    constexpr size_t operator[] (int index) const {
         if (index >= 0)
             return dims[index];
         return dims[dims.size() + index];
     }
 
-    bool operator == (const Shape& other) const {
+    constexpr bool operator == (const Shape& other) const {
         return std::equal(dims.begin(), dims.end(), other.dims.begin());
     }
 
-    bool operator != (const Shape& other) const {
+    constexpr bool operator != (const Shape& other) const {
         return !(*this == other);
    }
 
-    size_t numel() const {
+    constexpr size_t numel() const {
         size_t result = 1;
         for (size_t dim : dims)
             result *= dim;

@@ -17,7 +17,7 @@ void fill_random_data(Rng& rng, Data* data, size_t n) {
         for (size_t i = 0; i < n; ++i)
             data[i] = dist(rng);
     } else {
-        std::uniform_int_distribution<Data> dist(0, n);
+        std::uniform_int_distribution<Data> dist(1, n);
         for (size_t i = 0; i < n; ++i)
             data[i] = dist(rng);
     }

@@ -9,6 +9,6 @@ add_library(tensor tensor.cpp)
 # target_link_libraries(tensor PRIVATE cpu)
 target_include_directories(tensor PRIVATE .)
 
-target_link_libraries(tensor_build PRIVATE cpu)
+target_link_libraries(tensor_build PRIVATE cpu gpu)
 
 target_include_directories(tensor_build PRIVATE .)

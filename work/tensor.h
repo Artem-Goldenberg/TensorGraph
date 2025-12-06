@@ -21,10 +21,14 @@ public:
 
     Tensor copy() const;
 
+    Tensor to(device_t device) const;
+
     void add(const Tensor& other);
     void subtract(const Tensor& other);
     void multiply(const Tensor& other);
     void divide(const Tensor& other);
+
+    Tensor matmul(const Tensor& other) const;
 
     Tensor& operator += (const Tensor& other);
     Tensor& operator -= (const Tensor& other);

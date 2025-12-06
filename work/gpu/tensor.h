@@ -4,7 +4,7 @@
 #include "device-tensor.h"
 #include "primitives.h"
 
-namespace cpu {
+namespace gpu {
 
 class Tensor final : public DeviceTensor {
 public:
@@ -18,6 +18,16 @@ public:
     void divide(const DeviceTensor& other) override;
 
     TensorRef matmul(const DeviceTensor& other) const override;
+
+    template <typename Data>
+    void flush(Data* out) const;
+
+    int get_grid_size() const { return grid_size; }
+    int get_block_size() const { return block_size; }
+
+private:
+    int grid_size;
+    int block_size;
 };
 
 }

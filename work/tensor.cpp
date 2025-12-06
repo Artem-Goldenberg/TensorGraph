@@ -1,7 +1,10 @@
 #include <cstring>
+#include <iostream>
+
 #include "tensor.h"
 
 #include "cpu/tensor.h"
+#include "gpu/tensor.h"
 #include "utils.h"
 
 using std::vector;
@@ -18,6 +21,7 @@ namespace {
         case device_t::CPU:
             return std::make_shared<cpu::Tensor>(params, data);
         case device_t::GPU:
+            return std::make_shared<gpu::Tensor>(params, data);
         default:
             throw std::runtime_error("Unsupported device");
         }
@@ -26,7 +30,7 @@ namespace {
 
 template<typename Data>
 Tensor Tensor::from_blob(const Data* data, TensorParams params) {
-    return Tensor(make_tensor(data, params));
+    return Tensor(make_tensor<Data>(data, params));
 }
 
 Tensor Tensor::zeroes(TensorParams params) {
@@ -78,6 +82,40 @@ const TensorParams& Tensor::get_params() const {
 
 Tensor Tensor::copy() const {
     return Tensor(pImpl->copy());
+}
+
+Tensor Tensor::to(device_t device) const {
+    if (this->get_params().device == device) {
+        // std::cout << "Tensor device " << device << " haven't changed" << std::endl;
+        return *this;
+    }
+
+    shared_ptr<DeviceTensor> new_impl;
+    TensorParams old_params = get_params();
+
+    lift(old_params.dtype, [&]<dtype_t tp>() {
+        using Data = Info<tp>::Data;
+    
+        if (device == device_t::CPU) {
+            // Gone from GPU to CPU, need to flush the memory from GPU
+            new_impl = make_tensor<Data>(nullptr, old_params.copy().with_device(device));
+            shared_ptr<gpu::Tensor> impl = std::dynamic_pointer_cast<gpu::Tensor>(pImpl);
+            assert(impl);
+            impl->flush<Data>(new_impl->get_mutable_data<Data>());
+        } 
+        else {
+            // Gone from CPU to GPU, just create a gpu tensor
+            new_impl = make_tensor<Data>(
+                pImpl->get_data<Data>(), old_params.copy().with_device(device)
+            );
+        }
+    });
+
+    return Tensor(new_impl);
+}
+
+Tensor Tensor::matmul(const Tensor& other) const {
+    return Tensor(pImpl->matmul(*other.pImpl));
 }
 
 void Tensor::add(const Tensor& other) { pImpl->add(*other.pImpl); }

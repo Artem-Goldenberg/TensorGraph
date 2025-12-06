@@ -80,6 +80,7 @@ compile_commands.json
 # ---------------------------
 trash.txt
 suggested.cpp
+notes.txt
 *.log
 *.tmp
 *.bak

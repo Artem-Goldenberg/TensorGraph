@@ -39,25 +39,41 @@ Tensor::Tensor(const TensorParams& params, const void* data): DeviceTensor(param
 
 TensorRef Tensor::copy() const {
     assert(this->data);
-    return std::make_shared<Tensor>(params, this->data);
+    return std::make_shared<Tensor>(params, this->data.get());
 }
 
-static void check_compatible(const Tensor& self, const DeviceTensor& other) {
-    auto& params = self.get_params();
-    auto& other_params = other.get_params();
+TensorRef Tensor::matmul(const DeviceTensor& other) const {
+    check_matmul_compatible(*this, other);
 
-    check(params.device == other_params.device,
-        "Tried to do an operation on two tensors from different devices");
-    
-    check(params.dtype == other_params.dtype,
-        "Cannot do an operation on tensors of different types");
-}
+    // n, l * l, m --> n, m
 
-static void check_bulk_compatible(const Tensor& self, const DeviceTensor& other) {
-    check_compatible(self, other);
+    size_t n = params.shape[0];
+    size_t l = params.shape[1];
+    size_t m = other.get_params().shape[1];
 
-    check(self.get_params().shape == other.get_params().shape, 
-        "Cannot do a bulk operation on a tenosrs of different shape");
+    std::shared_ptr<DeviceTensor> result;
+
+    lift(params.dtype, [&]<dtype_t tp>() { 
+        using Data = Info<tp>::Data;
+
+        const Data* data = get_data<Data>();
+        const Data* other_data = other.get_data<Data>();
+
+        result = std::make_shared<Tensor>(params.copy().with_shape({n, m}), nullptr);
+        Data* result_data = result->get_mutable_data<Data>();
+
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t j = 0; j < m; ++j) {
+                Data sum = 0;
+                for (size_t k = 0; k < l; ++k) {
+                    sum += data[i * l + k] * other_data[k * m + j];
+                }
+                result_data[i * m + j] = sum;
+            }
+        }
+    });
+
+    return result;
 }
 
 template <dtype_t tp>
@@ -76,25 +92,27 @@ struct simd_foreach {
             dst[i] = scalar_op(dst[i], src[i]);
     }
 
-    template <typename ScalarOp, typename SimdOp>
+    template <typename ScalarOp, typename SimdOp = nullptr_t>
     static void call(Data* dst, const Data* src, size_t n, ScalarOp&& scalar_op, SimdOp&& simd_op) {
         using Simd = Simd<tp>;
         size_t step = Simd::width;
         size_t simd_end = n / step * step; 
-        for (size_t i = 0; i < simd_end; i += step) {
-            auto reg1 = Simd::load(dst + i);
-            auto reg2 = Simd::load(src + i);
-            auto res = simd_op(reg1, reg2);
-            Simd::store(dst + i, res);
+        if constexpr (!std::is_same_v<SimdOp, nullptr_t>) {
+            for (size_t i = 0; i < simd_end; i += step) {
+                auto reg1 = Simd::load(dst + i);
+                auto reg2 = Simd::load(src + i);
+                auto res = simd_op(reg1, reg2);
+                Simd::store(dst + i, res);
+            }
         }
         call(dst + simd_end, src + simd_end, n - simd_end, scalar_op);
     }
 };
 
-template <dtype_t tp, typename ScalarOp, typename SimdOp>
+template <dtype_t tp, typename ScalarOp, typename SimdOp = nullptr_t>
 static void bulk_operation(
     Tensor& a, const DeviceTensor& b,
-    ScalarOp&& scalar_op, SimdOp&& simd_op
+    ScalarOp&& scalar_op, SimdOp&& simd_op = nullptr
 ) {
     using Data = Simd<tp>::Data;
 
@@ -122,27 +140,28 @@ struct Scalar {
 
 void Tensor::add(const DeviceTensor& other) {
     lift(params.dtype, [&]<dtype_t tp>() {
-        bulk_operation<tp>(*this, other, Scalar<tp>::add, nullptr);//, Simd<tp>::add);
+        bulk_operation<tp>(*this, other, Scalar<tp>::add, Simd<tp>::add);
     });
 }
 
 void Tensor::subtract(const DeviceTensor& other) {
     lift(params.dtype, [&]<dtype_t tp>() {
-        bulk_operation<tp>(*this, other, Scalar<tp>::subtract, nullptr);//, Simd<tp>::subtract);
+        bulk_operation<tp>(*this, other, Scalar<tp>::subtract, Simd<tp>::subtract);
     });
 }
 
 void Tensor::multiply(const DeviceTensor& other) {
     lift(params.dtype, [&]<dtype_t tp>() {
-        bulk_operation<tp>(*this, other, Scalar<tp>::multiply, nullptr);//, Simd<tp>::multiply);
+        bulk_operation<tp>(*this, other, Scalar<tp>::multiply, Simd<tp>::multiply);
     });
 }
 
 void Tensor::divide(const DeviceTensor& other) {
     lift(params.dtype, [&]<dtype_t tp>() {
-        auto simd_div = Simd<tp>::divide;
         if constexpr (tp == dtype_t::Int32)
-            simd_div = nullptr;  // no integer simd division
-        bulk_operation<tp>(*this, other, Scalar<tp>::divide, nullptr);
+            // no integer simd division
+            bulk_operation<tp>(*this, other, Scalar<tp>::divide, nullptr);
+        else
+            bulk_operation<tp>(*this, other, Scalar<tp>::divide, Simd<tp>::divide);
     });
 }
