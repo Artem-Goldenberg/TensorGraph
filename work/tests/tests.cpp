@@ -2,23 +2,23 @@
 #include "../utils.h"
 #include "tests/utils.h"
 
-TEST_CASE("CPU copy", "[some]") {
+template <typename Data>
+static std::tuple<Tensor, Matrix<Data>> matrix_test_data(const Shape& shape, device_t device) {
+    Data* data = new Data[shape.numel()];
 
-    using Data = float;
+    std::mt19937 rng(seed);
 
-    Shape shape = {101, 103};
+    fill_random_data<Data>(rng, data, shape.numel());
 
-    auto [a_data, b_data] = make_test_data<Data>(42, shape.numel());
+    Tensor a = Tensor::from_blob<Data>(
+        data, {.shape = shape, .device = device, .dtype = unlift<Data>}
+    );
 
-    Tensor a = Tensor::from_blob<Data>(a_data, {.shape = shape, .dtype = unlift<Data>});
-    // Tensor b = Tensor::from_blob(b_data, {.shape = shape, .dtype = dtype_t::Float32});
+    Matrix<Data> mat = to_matrix(data, shape[0], shape[1]);
 
-    Tensor b = a.copy();
+    delete[] data;
 
-    vector<Data> a_vec(a_data, a_data + shape.numel());
-
-    equals(a_vec, b.get_data<Data>());
-
+    return {a, mat};
 }
 
 template <typename Data, typename ScalarOp>
@@ -62,10 +62,38 @@ static std::tuple<Tensor, Tensor, vector<Data>> operation_test_data(
     vector<size_t>{1024, 200, 8}
     // vector<size_t>{1024, 1024, 1024}
 
+#define Shapes2D \
+    vector<size_t>{1, 1}, \
+    vector<size_t>{1, 2}, \
+    vector<size_t>{2, 1}, \
+    vector<size_t>{16, 15}, \
+    vector<size_t>{101, 103}, \
+    vector<size_t>{1024, 1024}
 
-TEMPLATE_TEST_CASE(
-    "addition", "[add]", int, float, double
-) {
+
+TEMPLATE_TEST_CASE("copying", "[copy]", int, float, double) {
+    using Data = TestType;
+
+    device_t device = GENERATE(device_t::CPU, device_t::GPU);
+    Shape shape = GENERATE(Shapes);
+
+    auto [data, to_free] = make_test_data<Data>(seed, shape.numel());
+
+    Tensor a = Tensor::from_blob<Data>(
+        data, {.shape = shape, .device = device, .dtype = unlift<Data>}
+    );
+
+    Tensor b = a.copy();
+    b = b.to(device_t::CPU);
+
+    vector<Data> vec = vector<Data>(data, data + shape.numel());
+    equals(vec, b.get_data<Data>());
+
+    delete[] data;
+    delete[] to_free;
+}
+
+TEMPLATE_TEST_CASE("addition", "[add]", int, float, double) {
     using Data = TestType;
 
     vector<size_t> dims = GENERATE(Shapes);
@@ -139,13 +167,60 @@ TEMPLATE_TEST_CASE(
     equals(result, a.template get_data<Data>());
 }
 
-template <typename Data>
-Matrix<Data> to_matrix(const Data* data, size_t rows, size_t cols) {
-    Matrix<Data> mat(rows, vector<Data>(cols));
-    for (size_t i = 0; i < rows; ++i)
-        for (size_t j = 0; j < cols; ++j)
-            mat[i][j] = data[i * cols + j];
-    return mat;
+TEMPLATE_TEST_CASE("sum", "[sum]", int, float, double) { 
+    using Data = TestType;
+
+    Shape shape = GENERATE(Shapes);
+    device_t device = GENERATE(device_t::CPU, device_t::GPU);
+
+    CAPTURE(shape.get_dims());
+    CAPTURE(device);
+
+    Data* data = new Data[shape.numel()];
+
+    std::mt19937 rng(seed);
+
+    fill_random_data<Data>(rng, data, shape.numel());
+
+    Tensor a = Tensor::from_blob<Data>(
+        data, {.shape = shape, .device = device, .dtype = unlift<Data>}
+    );
+
+    Data sum = 0;
+    for (uint i = 0; i < shape.numel(); ++i) sum += data[i];
+
+    Tensor single = a.sum().to(device_t::CPU);
+
+    Data result = single.get_data<Data>()[0];
+
+    REQUIRE(nearly_equal_impl(result, sum));
+
+    delete[] data;
+}
+
+TEMPLATE_TEST_CASE("transpose", "[tp]", int, float, double) {
+    using Data = TestType;
+
+    vector<size_t> dims = GENERATE(Shapes2D);
+
+    device_t device = GENERATE(device_t::CPU, device_t::GPU);
+
+    CAPTURE(dims);
+    CAPTURE(device);
+
+    Shape shape = Shape(dims);
+
+    REQUIRE(shape.ndims() == 2);
+
+    auto [a, mat] = matrix_test_data<Data>(shape, device);
+
+    Matrix<Data> result_mat = fullproof_transpose(mat);
+    vector<Data> result = from_matrix(result_mat);
+
+    Tensor b = a.transpose();
+    b = b.to(device_t::CPU);
+
+    equals(result, b.get_data<Data>());
 }
 
 TEMPLATE_TEST_CASE(
@@ -167,47 +242,16 @@ TEMPLATE_TEST_CASE(
     REQUIRE(b_shape.ndims() == 2);
     REQUIRE(a_shape[1] == b_shape[0]);
 
-    Data* a_data = new Data[a_shape.numel()];
-    Data* b_data = new Data[b_shape.numel()];
-
-    std::mt19937 rng(seed);
-
-    fill_random_data<Data>(rng, a_data, a_shape.numel());
-    fill_random_data<Data>(rng, b_data, b_shape.numel());
-
-    Tensor a = Tensor::from_blob<Data>(
-        a_data, {.shape = a_shape, .device = device, .dtype = unlift<Data>}
-    );
-    Tensor b = Tensor::from_blob<Data>(
-        b_data, {.shape = b_shape, .device = device, .dtype = unlift<Data>}
-    );
-
-    Matrix<Data> a_mat = to_matrix(a_data, a_shape[0], a_shape[1]);
-    Matrix<Data> b_mat = to_matrix(b_data, b_shape[0], b_shape[1]);
+    auto [a, a_mat] = matrix_test_data<Data>(a_shape, device);
+    auto [b, b_mat] = matrix_test_data<Data>(b_shape, device);
 
     Matrix<Data> result_mat = fullproof_matmul(a_mat, b_mat);
-
-    // Flatten result back to row-major vector
-    vector<Data> result(a_shape[0] * b_shape[1]);
-    for (size_t i = 0; i < a_shape[0]; ++i)
-        for (size_t j = 0; j < b_shape[1]; ++j)
-            result[i * b_shape[1] + j] = result_mat[i][j];
+    vector<Data> result = from_matrix(result_mat);
 
     Tensor c = a.matmul(b);
-
     c = c.to(device_t::CPU);
 
     equals(result, c.get_data<Data>());
-
-    delete[] a_data;
-    delete[] b_data;
-
-    // auto [a, b, result] = operation_test_data<Data>(dims, device, std::divides<Data>());
-
-    // a /= b;
-    // a = a.to(device_t::CPU);
-
-    // equals(result, a.template get_data<Data>());
 }
 
 

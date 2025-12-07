@@ -1,5 +1,6 @@
 #include <cstring>
 #include <iostream>
+#include <functional>
 
 #include "tensor.h"
 
@@ -33,12 +34,30 @@ Tensor Tensor::from_blob(const Data* data, TensorParams params) {
     return Tensor(make_tensor<Data>(data, params));
 }
 
+template<typename Data>
+Tensor Tensor::from_values(std::initializer_list<Data> values, TensorParams params) {
+    Data* data = new Data[values.size()];
+    std::copy(values.begin(), values.end(), data);
+
+    Tensor result = Tensor(make_tensor<Data>(data, params));
+
+    delete[] data;
+    return result;
+}
+
 Tensor Tensor::zeroes(TensorParams params) {
-    return Tensor::fill(0, params);
+    return lift(params.dtype, [&]<dtype_t tp>() -> Tensor {
+        return Tensor::fill(Info<tp>::zero, params);
+    });
 }
 
 Tensor Tensor::ones(TensorParams params) {
-    return Tensor::fill(1, params);
+    Tensor* result_ptr = nullptr;
+    lift(params.dtype, [&]<dtype_t tp>() {
+        Tensor result = Tensor::fill(Info<tp>::one, params);
+        result_ptr = &result;
+    });
+    return *result_ptr;
 }
 
 template <typename Data>
@@ -47,13 +66,13 @@ Tensor Tensor::fill(Data some, TensorParams params) {
         throw runtime_error("Bad dtype to fill the tensor with");
 
     size_t n = params.shape.numel();
-    shared_ptr<DeviceTensor> impl;
 
-    lift(params.dtype, [&]<dtype_t tp>() {
-        unique_ptr<Data> temp = std::make_unique<Data>(n);
-        std::memset(temp.get(), some, n);
-        impl = make_tensor(temp.get(), params);
-    });
+    Data* data = new Data[n];
+    std::memset(data, some, n);
+
+    TensorRef impl = make_tensor(data, params);
+
+    delete[] data;
 
     return Tensor(impl);
 }
@@ -70,6 +89,7 @@ Data* Tensor::get_mutable_data() {
 
 #define InstantiateTemplates(tp, Data) \
     template Tensor Tensor::from_blob<Data>(const Data*, TensorParams); \
+    template Tensor Tensor::from_values<Data>(std::initializer_list<Data>, TensorParams); \
     template Tensor Tensor::fill<Data>(Data, TensorParams); \
     template const Data* Tensor::get_data<Data>() const; \
     template Data* Tensor::get_mutable_data<Data>();
@@ -114,8 +134,16 @@ Tensor Tensor::to(device_t device) const {
     return Tensor(new_impl);
 }
 
+Tensor Tensor::sum() const {
+    return Tensor(pImpl->sum());
+}
+
 Tensor Tensor::matmul(const Tensor& other) const {
     return Tensor(pImpl->matmul(*other.pImpl));
+}
+
+Tensor Tensor::transpose() const {
+    return Tensor(pImpl->transpose());
 }
 
 void Tensor::add(const Tensor& other) { pImpl->add(*other.pImpl); }
@@ -141,4 +169,78 @@ Tensor& Tensor::operator*=(const Tensor& other) {
 Tensor& Tensor::operator/=(const Tensor& other) {
     this->divide(other);
     return *this;
+}
+
+Tensor Tensor::operator + (const Tensor& other) const {
+    Tensor result = copy();
+    result += other;
+    return result;
+}
+
+Tensor Tensor::operator - (const Tensor& other) const {
+    Tensor result = copy();
+    result -= other;
+    return result;
+}
+
+Tensor Tensor::operator * (const Tensor& other) const {
+    Tensor result = copy();
+    result *= other;
+    return result;
+}
+
+Tensor Tensor::operator / (const Tensor& other) const {
+    Tensor result = copy();
+    result /= other;
+    return result;
+}
+
+std::ostream& operator << (std::ostream& out, const Tensor& t) {
+    const TensorParams& p = t.get_params();
+    const Shape& shape = p.shape;
+    size_t dims = shape.ndims();
+
+    if (dims == 0) {
+        return out << "[]";
+    }
+
+    lift(p.dtype, [&]<dtype_t tp>() {
+        using Data = Info<tp>::Data;
+
+        const Data* data = t.get_data<Data>();
+
+        // Compute row-major strides
+        std::vector<size_t> stride(dims);
+        stride[dims - 1] = 1;
+        for (int i = dims - 2; i >= 0; --i)
+            stride[i] = stride[i + 1] * shape[i + 1];
+
+        // Recursive ND print
+        std::function<void(size_t, size_t)> rec =
+            [&](size_t dim, size_t offset) {
+            if (dim == dims - 1) {
+                out << "[";
+                for (size_t i = 0; i < shape[dim]; ++i) {
+                    if (i) out << ", ";
+                    out << data[offset + i];
+                }
+                out << "]";
+                return;
+            }
+
+            out << "[";
+            for (size_t i = 0; i < shape[dim]; ++i) {
+                if (i) {
+                    out << ",\n";
+                    out << std::string(dim + 1, ' ');
+                }
+                rec(dim + 1, offset + i * stride[dim]);
+            }
+            out << "]";
+            };
+
+        rec(0, 0);
+    });
+
+    return out;
 }

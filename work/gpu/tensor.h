@@ -17,7 +17,10 @@ public:
     void multiply(const DeviceTensor& other) override;
     void divide(const DeviceTensor& other) override;
 
+    TensorRef sum() const override;
+
     TensorRef matmul(const DeviceTensor& other) const override;
+    TensorRef transpose() const override;
 
     template <typename Data>
     void flush(Data* out) const;

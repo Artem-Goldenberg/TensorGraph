@@ -10,16 +10,15 @@
     X(dtype_t::Int32,   int)
 
 template <typename Fn>
-constexpr void lift(dtype_t type, Fn&& func) {
+constexpr auto lift(dtype_t type, Fn&& func) {
     #define Case(tp, T) \
         case tp: \
-            func.template operator()<tp>(); \
-            break;
+            return func.template operator()<tp>(); \
 
     switch (type) {
         ForEachDType(Case)
     default:
-        assert(false);
+        throw std::runtime_error("Unknown dtype");
     }
 }
 
@@ -30,6 +29,8 @@ struct Info {};
     template<> \
     struct Info<tp> { \
         using Data = T; \
+        static constexpr Data one = 1; \
+        static constexpr Data zero = 0; \
     };
 
 ForEachDType(InfoDef)

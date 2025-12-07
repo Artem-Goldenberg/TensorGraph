@@ -67,6 +67,41 @@ template <typename Data>
 using Matrix = vector<vector<Data>>;
 
 template <typename Data>
+Matrix<Data> to_matrix(const Data* data, size_t rows, size_t cols) {
+    Matrix<Data> mat(rows, vector<Data>(cols));
+    for (size_t i = 0; i < rows; ++i)
+        for (size_t j = 0; j < cols; ++j)
+            mat[i][j] = data[i * cols + j];
+    return mat;
+}
+
+template <typename Data>
+vector<Data> from_matrix(const Matrix<Data>& mat) { 
+    size_t rows = mat.size();
+    size_t cols = mat[0].size();
+    // Flatten result back to row-major vector
+    vector<Data> result(rows * cols);
+    for (size_t i = 0; i < rows; ++i)
+        for (size_t j = 0; j < cols; ++j)
+            result[i * cols + j] = mat[i][j];
+    return result;
+}
+
+template <typename Data>
+Matrix<Data> fullproof_transpose(const Matrix<Data>& a) { 
+    size_t rows = a.size();
+    size_t cols = a[0].size();
+
+    Matrix<Data> result(cols, vector<Data>(rows, Data{}));
+
+    for (size_t i = 0; i < rows; ++i)
+        for (size_t j = 0; j < cols; ++j)
+            result[j][i] = a[i][j];
+
+    return result; 
+}
+
+template <typename Data>
 Matrix<Data> fullproof_matmul(const Matrix<Data>& a, const Matrix<Data>& b) {
     // Check if either matrix is empty
     if (a.empty() || b.empty()) 

@@ -4,8 +4,8 @@ project(homework VERSION 0.0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 
 add_compile_options(
-    # -g
-    -O3
+    -g
+    # -O3
     -mavx2
     -Wall -Wextra 
     # -fsanitize=undefined 

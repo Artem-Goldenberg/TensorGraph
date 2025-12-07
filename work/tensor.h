@@ -1,4 +1,5 @@
 #pragma once
+#include <ostream>
 #include <memory>
 #include "device-tensor.h"
 
@@ -8,6 +9,9 @@ class Tensor final {
 public:
     template <typename Data>
     static Tensor from_blob(const Data* data, TensorParams params);
+
+    template <typename Data>
+    static Tensor from_values(std::initializer_list<Data> values, TensorParams params);
 
     static Tensor zeroes(TensorParams params);
     static Tensor ones(TensorParams params);
@@ -28,15 +32,25 @@ public:
     void multiply(const Tensor& other);
     void divide(const Tensor& other);
 
+    Tensor sum() const;
+
     Tensor matmul(const Tensor& other) const;
+    Tensor transpose() const;
 
     Tensor& operator += (const Tensor& other);
     Tensor& operator -= (const Tensor& other);
     Tensor& operator *= (const Tensor& other);
     Tensor& operator /= (const Tensor& other);
 
+    Tensor operator + (const Tensor& other) const;
+    Tensor operator - (const Tensor& other) const;
+    Tensor operator * (const Tensor& other) const;
+    Tensor operator / (const Tensor& other) const;
+
 private:
     shared_ptr<DeviceTensor> pImpl;
 
     Tensor(shared_ptr<DeviceTensor> pImpl): pImpl(pImpl) {}
 };
+
+std::ostream& operator<<(std::ostream& os, const Tensor& t);

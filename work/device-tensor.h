@@ -39,7 +39,10 @@ public:
     virtual void multiply(const DeviceTensor& other) = 0;
     virtual void divide(const DeviceTensor& other) = 0;
 
+    virtual TensorRef sum() const = 0;
+
     virtual TensorRef matmul(const DeviceTensor& other) const = 0;
+    virtual TensorRef transpose() const = 0;
 
     virtual ~DeviceTensor() = default;
 };
@@ -84,4 +87,12 @@ constexpr void check_matmul_compatible(const DeviceTensor& self, const DeviceTen
     
     check(shape[1] == other_shape[0],
         "Mismatch on the common dimension in matmul");
+}
+
+constexpr void check_transposable(const DeviceTensor& self) { 
+    const Shape& shape = self.get_params().shape;
+
+    validate(shape);
+
+    check(shape.ndims() == 2, "Transpose for non-2D tensors is not supported");
 }

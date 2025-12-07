@@ -17,6 +17,10 @@ struct Shape {
     Shape(std::initializer_list<size_t> dims): dims(dims) {}
     Shape(std::vector<size_t> dims): dims(dims) {}
 
+    constexpr const std::vector<size_t>& get_dims() const { 
+        return dims;
+    }
+
     constexpr size_t ndims() const {
         return dims.size();
     }

@@ -42,6 +42,49 @@ TensorRef Tensor::copy() const {
     return std::make_shared<Tensor>(params, this->data.get());
 }
 
+TensorRef Tensor::sum() const {
+    validate(params.shape);
+
+    TensorRef result = std::make_shared<Tensor>(params.copy().with_shape({1}), nullptr);
+
+    lift(params.dtype, [&]<dtype_t tp>() { 
+        using Simd = Simd<tp>;
+        using Data = Simd::Data;
+        using simd = Simd::simd; // register type
+
+        static const size_t step = Simd::width;
+
+        alignas(32) Data buffer[8] = {}; // zeroes
+
+        simd sum = Simd::load(buffer);
+
+        size_t n = params.shape.numel();
+        size_t simd_end = n / step * step;
+
+        // const Data* result->get_data<Data>();
+        const Data* data = get_data<Data>();
+
+        for (size_t i = 0; i < simd_end; i += step) {
+            simd v = Simd::load(data + i);
+            sum = Simd::add(sum, v);
+        }
+
+        // store in buffer and add manually
+        Simd::store(buffer, sum);
+        Data total = buffer[0] + buffer[1] + buffer[2] + buffer[3] +
+                    buffer[4] + buffer[5] + buffer[6] + buffer[7];
+
+        // remaining elements
+        for (size_t i = simd_end; i < n; ++i)
+            total += data[i];
+        
+        Data* out = result->get_mutable_data<Data>();
+        out[0] = total;
+    });
+
+    return result;
+}
+
 TensorRef Tensor::matmul(const DeviceTensor& other) const {
     check_matmul_compatible(*this, other);
 
@@ -51,7 +94,7 @@ TensorRef Tensor::matmul(const DeviceTensor& other) const {
     size_t l = params.shape[1];
     size_t m = other.get_params().shape[1];
 
-    std::shared_ptr<DeviceTensor> result;
+    TensorRef result = std::make_shared<Tensor>(params.copy().with_shape({n, m}), nullptr);
 
     lift(params.dtype, [&]<dtype_t tp>() { 
         using Data = Info<tp>::Data;
@@ -59,7 +102,6 @@ TensorRef Tensor::matmul(const DeviceTensor& other) const {
         const Data* data = get_data<Data>();
         const Data* other_data = other.get_data<Data>();
 
-        result = std::make_shared<Tensor>(params.copy().with_shape({n, m}), nullptr);
         Data* result_data = result->get_mutable_data<Data>();
 
         for (size_t i = 0; i < n; ++i) {
@@ -76,56 +118,58 @@ TensorRef Tensor::matmul(const DeviceTensor& other) const {
     return result;
 }
 
-template <dtype_t tp>
-struct simd_foreach {
-    using Data = Simd<tp>::Data;
+TensorRef Tensor::transpose() const {
+    check_transposable(*this);
 
-    template <typename ScalarOp>
-    static void call(
-        Data* dst, const Data* src, size_t n,
-        ScalarOp&& scalar_op, std::nullptr_t simd_op = nullptr
-    ) {
-        // Overload so that we can compute only with a scalar operation, when simd is not
-        // available
-        (void)simd_op;
+    size_t n = params.shape[0];
+    size_t m = params.shape[1];
+
+    TensorRef result = std::make_shared<Tensor>(params.copy().with_shape({m, n}), nullptr);
+
+    lift(params.dtype, [&]<dtype_t tp>() { 
+        using Data = Info<tp>::Data;
+
+        const Data* data = this->get_data<Data>();
+        Data* result_data = result->get_mutable_data<Data>();
+
         for (size_t i = 0; i < n; ++i)
-            dst[i] = scalar_op(dst[i], src[i]);
-    }
+            for (size_t j = 0; j < m; ++j)
+                result_data[j * n + i] = data[i * m + j];
+    });
 
-    template <typename ScalarOp, typename SimdOp = nullptr_t>
-    static void call(Data* dst, const Data* src, size_t n, ScalarOp&& scalar_op, SimdOp&& simd_op) {
-        using Simd = Simd<tp>;
-        size_t step = Simd::width;
-        size_t simd_end = n / step * step; 
-        if constexpr (!std::is_same_v<SimdOp, nullptr_t>) {
-            for (size_t i = 0; i < simd_end; i += step) {
-                auto reg1 = Simd::load(dst + i);
-                auto reg2 = Simd::load(src + i);
-                auto res = simd_op(reg1, reg2);
-                Simd::store(dst + i, res);
-            }
-        }
-        call(dst + simd_end, src + simd_end, n - simd_end, scalar_op);
-    }
-};
+    return result;
+}
 
 template <dtype_t tp, typename ScalarOp, typename SimdOp = nullptr_t>
 static void bulk_operation(
     Tensor& a, const DeviceTensor& b,
     ScalarOp&& scalar_op, SimdOp&& simd_op = nullptr
 ) {
-    using Data = Simd<tp>::Data;
+    using Simd = Simd<tp>;
+    using Data = Simd::Data;
 
     check_bulk_compatible(a, b);
 
-    auto params = a.get_params();
+    Data* dst = a.get_mutable_data<Data>();
+    const Data* src = b.get_data<Data>();
 
-    simd_foreach<tp>::call(
-        a.get_mutable_data<Data>(),
-        b.get_data<Data>(),
-        params.shape.numel(),
-        scalar_op, simd_op
-    );
+    size_t n = a.get_params().shape.numel();
+
+    size_t step = Simd::width;
+    size_t simd_end = 0;
+
+    if constexpr (!std::is_same_v<SimdOp, nullptr_t>) {
+        simd_end = n / step * step; 
+        for (size_t i = 0; i < simd_end; i += step) {
+            auto reg1 = Simd::load(dst + i);
+            auto reg2 = Simd::load(src + i);
+            auto res = simd_op(reg1, reg2);
+            Simd::store(dst + i, res);
+        }
+    }
+
+    for (size_t i = simd_end; i < n; ++i)
+        dst[i] = scalar_op(dst[i], src[i]);
 }
 
 template <dtype_t tp>

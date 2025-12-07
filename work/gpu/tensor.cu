@@ -18,11 +18,25 @@ void cuda_check(cudaError_t err, const char* const func, const char* const file,
     }
 }
 
+template <typename Data, size_t ReduceSize>
+__global__ void sum_kernel(const Data* a, Data* out, long n) { 
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    Data sum = 0;
+    for (int j = 0; j < ReduceSize; ++j) {
+        int idx = i * ReduceSize + j;
+        if (idx < n)
+            sum += a[idx];
+    }
+
+    out[i] = sum;
+}
+
 // row-major, standard
 template <typename Data>
 __global__ void matmul_kernel(const Data* a, const Data* b, Data* out, long n, long l, long m) {
-    // a: n x l
-    // b: l x m
+    // a:   n x l
+    // b:   l x m
     // out: n x m
 
     int i = blockIdx.y * blockDim.y + threadIdx.y;
@@ -35,6 +49,19 @@ __global__ void matmul_kernel(const Data* a, const Data* b, Data* out, long n, l
         sum += a[i * l + k] * b[k * m + j];
     
     out[i * m + j] = sum;
+}
+
+template <typename Data>
+__global__ void transpose_kernel(const Data* a, Data* out, long n, long m) { 
+    // a:   n * m
+    // out: m x n
+
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i >= n || j >= m) return;
+
+    out[j * n + i] = a[i * m + j];
 }
 
 template <typename Data, typename ScalarOp>
@@ -62,7 +89,7 @@ template <typename T> struct Div {
 };
 
 template <typename Data, typename Op>
-float kernel_call(
+float bulk_kernel_call(
     int grid_size, int block_size,
     Data* a, const Data* b, size_t n
 ) {
@@ -94,7 +121,7 @@ void bulk_operation(Tensor& a, const DeviceTensor& b) {
 
     auto params = a.get_params();
 
-    kernel_call<Data, Op<Data>>(
+    bulk_kernel_call<Data, Op<Data>>(
         a.get_grid_size(), a.get_block_size(),
         a.get_mutable_data<Data>(),
         b.get_data<Data>(),
@@ -144,6 +171,63 @@ TensorRef Tensor::copy() const {
     return std::make_shared<Tensor>(params, this->data.get());
 }
 
+TensorRef Tensor::sum() const { 
+    validate(params.shape);
+
+    // Make 32 additions at once
+    const static size_t reduce_size = 32;
+
+    size_t n = params.shape.numel();
+    // Memory storing a single number
+    void* result_data = nullptr;
+
+    lift(params.dtype, [&]<dtype_t tp>() { 
+        using Data = Info<tp>::Data;
+
+        size_t block_size = this->block_size;
+        size_t grid_size = this->grid_size;
+
+        const Data* data = get_data<Data>();
+        Data* buf1 = nullptr;
+        Data* buf2 = nullptr;
+
+        bool toggle = true;
+        while (n > reduce_size) {
+            size_t n_reduced = (n + reduce_size - 1) / reduce_size;
+            grid_size = (n_reduced + block_size - 1) / block_size;
+
+            Data* &out = toggle ? buf1 : buf2;
+            toggle = !toggle;
+
+            if (!out)
+                CHECK_CUDA_ERROR(cudaMalloc(&out, n_reduced * sizeof(Data)));
+
+            assert(out);
+
+            sum_kernel<Data, reduce_size> <<<grid_size, block_size>>> (data, out, n);
+            CHECK_CUDA_ERROR(cudaGetLastError());
+
+            n = n_reduced;
+            data = out;
+        }
+
+        // Complete the computation on CPU
+        result_data = malloc(n * sizeof(Data));
+        CHECK_CUDA_ERROR(cudaMemcpy(result_data, data, n * sizeof(Data), cudaMemcpyDeviceToHost));
+
+        for (size_t i = 1; i < n; ++i)
+            *(Data*)result_data += ((Data*)result_data)[i];
+
+        if (buf1) cudaFree(buf1);
+        if (buf2) cudaFree(buf2);
+    });
+
+    TensorRef result =  std::make_shared<Tensor>(params.copy().with_shape({1}), result_data);
+    free(result_data);
+
+    return result;
+}
+
 TensorRef Tensor::matmul(const DeviceTensor& other) const {
     check_matmul_compatible(*this, other);
 
@@ -166,6 +250,30 @@ TensorRef Tensor::matmul(const DeviceTensor& other) const {
         const Data* other_data = other.get_data<Data>();
 
         matmul_kernel<Data> <<<grid, block>>> (data, other_data, out, n, l, m);
+    });
+
+    return result;
+}
+
+TensorRef Tensor::transpose() const { 
+    check_transposable(*this);
+
+    size_t n = params.shape[0];
+    size_t m = params.shape[1];
+
+    // x is columns, y is rows
+    dim3 block(16, 16);
+    dim3 grid((m + block.x - 1) / block.x, (n + block.y - 1) / block.y);
+
+    TensorRef result = std::make_shared<Tensor>(params.copy().with_shape({m, n}), nullptr);
+
+    lift(params.dtype, [&]<dtype_t tp>() {
+        using Data = Info<tp>::Data;
+
+        Data* out = result->get_mutable_data<Data>();
+        const Data* data = get_data<Data>();
+
+        transpose_kernel<Data> <<<grid, block>>> (data, out, n, m);
     });
 
     return result;
