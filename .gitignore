@@ -78,6 +78,7 @@ compile_commands.json
 # ---------------------------
 # Misc
 # ---------------------------
+testing/
 trash.txt
 suggested.cpp
 notes.txt
