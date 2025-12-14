@@ -16,13 +16,24 @@ using std::runtime_error;
 
 namespace {
     template <typename Data>
-    shared_ptr<DeviceTensor> make_tensor(const Data* data, TensorParams params) {
-        switch (params.device)
-        {
+    TensorRef make_tensor(const Data* data, const TensorParams& params) {
+        switch (params.device) {
         case device_t::CPU:
             return std::make_shared<cpu::Tensor>(params, data);
         case device_t::GPU:
             return std::make_shared<gpu::Tensor>(params, data);
+        default:
+            throw std::runtime_error("Unsupported device");
+        }
+    }
+
+    template <typename Data>
+    TensorRef make_filled_tensor(Data elem, const TensorParams& params) {
+        switch (params.device) {
+        case device_t::CPU:
+            return std::make_shared<cpu::Tensor>(elem, params);
+        case device_t::GPU:
+            return std::make_shared<gpu::Tensor>(elem, params);
         default:
             throw std::runtime_error("Unsupported device");
         }
@@ -36,12 +47,14 @@ Tensor Tensor::from_blob(const Data* data, TensorParams params) {
 
 template<typename Data>
 Tensor Tensor::from_values(std::initializer_list<Data> values, TensorParams params) {
-    Data* data = new Data[values.size()];
-    std::copy(values.begin(), values.end(), data);
+    check(values.size() == params.shape.numel(),
+        "The amount of values does not match the provided shape");
 
-    Tensor result = Tensor(make_tensor<Data>(data, params));
+    vector<Data> vec = vector(values.begin(), values.end());
+    std::copy(values.begin(), values.end(), vec.begin());
 
-    delete[] data;
+    Tensor result = Tensor(make_tensor<Data>(vec.data(), params));
+
     return result;
 }
 
@@ -52,12 +65,9 @@ Tensor Tensor::zeroes(TensorParams params) {
 }
 
 Tensor Tensor::ones(TensorParams params) {
-    Tensor* result_ptr = nullptr;
-    lift(params.dtype, [&]<dtype_t tp>() {
-        Tensor result = Tensor::fill(Info<tp>::one, params);
-        result_ptr = &result;
+    return lift(params.dtype, [&]<dtype_t tp>() -> Tensor {
+        return Tensor::fill(Info<tp>::one, params);
     });
-    return *result_ptr;
 }
 
 template <typename Data>
@@ -65,16 +75,7 @@ Tensor Tensor::fill(Data some, TensorParams params) {
     if (unlift<Data> != params.dtype)
         throw runtime_error("Bad dtype to fill the tensor with");
 
-    size_t n = params.shape.numel();
-
-    Data* data = new Data[n];
-    std::memset(data, some, n);
-
-    TensorRef impl = make_tensor(data, params);
-
-    delete[] data;
-
-    return Tensor(impl);
+    return make_filled_tensor(some, params);
 }
 
 template<typename Data>
@@ -151,22 +152,24 @@ void Tensor::subtract(const Tensor& other) { pImpl->subtract(*other.pImpl); }
 void Tensor::multiply(const Tensor& other) { pImpl->multiply(*other.pImpl); }
 void Tensor::divide(const Tensor& other) { pImpl->divide(*other.pImpl); }
 
-Tensor& Tensor::operator+=(const Tensor& other) {
+void Tensor::clear() { pImpl->clear(); }
+
+Tensor& Tensor::operator += (const Tensor& other) {
     this->add(other);
     return *this;
 }
 
-Tensor& Tensor::operator-=(const Tensor& other) {
+Tensor& Tensor::operator -= (const Tensor& other) {
     this->subtract(other);
     return *this;
 }
 
-Tensor& Tensor::operator*=(const Tensor& other) {
+Tensor& Tensor::operator *= (const Tensor& other) {
     this->multiply(other);
     return *this;
 }
 
-Tensor& Tensor::operator/=(const Tensor& other) {
+Tensor& Tensor::operator /= (const Tensor& other) {
     this->divide(other);
     return *this;
 }
@@ -197,6 +200,10 @@ Tensor Tensor::operator / (const Tensor& other) const {
 
 std::ostream& operator << (std::ostream& out, const Tensor& t) {
     const TensorParams& p = t.get_params();
+
+    check(p.device == device_t::CPU, 
+        "Cannot print a GPU tensor, transfer it to CPU first");
+
     const Shape& shape = p.shape;
     size_t dims = shape.ndims();
 

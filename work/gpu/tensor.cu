@@ -18,6 +18,13 @@ void cuda_check(cudaError_t err, const char* const func, const char* const file,
     }
 }
 
+template <typename Data>
+__global__ void fill_kernel(Data elem, Data* out, long n) { 
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        out[i] = elem;
+}
+
 template <typename Data, size_t ReduceSize>
 __global__ void sum_kernel(const Data* a, Data* out, long n) { 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -88,31 +95,6 @@ template <typename T> struct Div {
     __device__ static T call(T a, T b) { return a / b; }
 };
 
-template <typename Data, typename Op>
-float bulk_kernel_call(
-    int grid_size, int block_size,
-    Data* a, const Data* b, size_t n
-) {
-    cudaEvent_t start, stop;
-
-    CHECK_CUDA_ERROR(cudaEventCreate(&start));
-    CHECK_CUDA_ERROR(cudaEventCreate(&stop));
-    CHECK_CUDA_ERROR(cudaEventRecord(start));
-
-    bulk_kernel<Data, Op> << <grid_size, block_size >> > (a, b, n);
-
-    CHECK_CUDA_ERROR(cudaEventRecord(stop));
-    CHECK_CUDA_ERROR(cudaEventSynchronize(stop));
-
-    float milliseconds = 0;
-
-    CHECK_CUDA_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
-    CHECK_CUDA_ERROR(cudaEventDestroy(start));
-    CHECK_CUDA_ERROR(cudaEventDestroy(stop));
-
-    return milliseconds;
-}
-
 template <dtype_t tp, template<typename> typename Op>
 void bulk_operation(Tensor& a, const DeviceTensor& b) {
     using Data = typename Info<tp>::Data;
@@ -121,10 +103,9 @@ void bulk_operation(Tensor& a, const DeviceTensor& b) {
 
     auto params = a.get_params();
 
-    bulk_kernel_call<Data, Op<Data>>(
-        a.get_grid_size(), a.get_block_size(),
-        a.get_mutable_data<Data>(),
-        b.get_data<Data>(),
+    bulk_kernel<Data, Op<Data>> <<< a.get_grid_size(), a.get_block_size() >>> (
+        a.get_mutable_data<Data>(), 
+        b.get_data<Data>(), 
         params.shape.numel()
     );
 }
@@ -156,7 +137,27 @@ Tensor::Tensor(const TensorParams& params, const void* data): DeviceTensor(param
     }
 
     this->data = std::shared_ptr<void>(gpu_data, cudaFree);
+    compute_grid_sizes();
+}
 
+template <typename Data>
+Tensor::Tensor(Data elem, const TensorParams& params): DeviceTensor(params) {
+    check(params.device == device_t::GPU, "Tried to instantiate a GPU Tensor with CPU parameters");
+
+    size_t memsize = bytesize(params);
+    void* gpu_data = nullptr;
+
+    CHECK_CUDA_ERROR(cudaMalloc(&gpu_data, memsize));
+    assert(gpu_data);
+
+    this->data = std::shared_ptr<void>(gpu_data, cudaFree);
+    compute_grid_sizes(); 
+
+    fill_kernel<Data> <<<grid_size, block_size>>> (elem, (Data*)gpu_data, params.shape.numel());
+    CHECK_CUDA_ERROR(cudaGetLastError());
+}
+
+void Tensor::compute_grid_sizes() {
     int max_threads_per_block = 0;
 
     CHECK_CUDA_ERROR(
@@ -303,12 +304,23 @@ void Tensor::divide(const DeviceTensor& other) {
     });
 }
 
+void Tensor::clear() {
+    lift(params.dtype, [&]<dtype_t tp>() {
+        using Data = Info<tp>::Data;
+
+        Data* out = get_mutable_data<Data>();
+
+        fill_kernel<Data> <<<grid_size, block_size>>> ((Data)0, out, params.shape.numel());
+    });
+}
+
 template <typename Data>
 void Tensor::flush(Data *result) const {
     CHECK_CUDA_ERROR(cudaMemcpy(result, get_data<Data>(), bytesize(params), cudaMemcpyDeviceToHost));
 }
 
 #define InstantiateTemplates(tp, Data) \
+    template Tensor::Tensor<Data>(Data, const TensorParams&); \
     template void Tensor::flush<Data>(Data*) const;
 
 ForEachDType(InstantiateTemplates)

@@ -44,6 +44,8 @@ public:
     virtual TensorRef matmul(const DeviceTensor& other) const = 0;
     virtual TensorRef transpose() const = 0;
 
+    virtual void clear() = 0;
+
     virtual ~DeviceTensor() = default;
 };
 

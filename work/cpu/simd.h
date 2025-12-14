@@ -12,12 +12,16 @@ struct Simd<dtype_t::Float32> {
     using simd = __m256;
     static const size_t width = 8;
 
-    static simd load(const float* data) {
+    static simd load(const Data* data) {
         return _mm256_loadu_ps(data);
     }
 
-    static void store(float* data, simd reg) {
+    static void store(Data* data, simd reg) {
         _mm256_storeu_ps(data, reg);
+    }
+
+    static simd set(Data data) { 
+        return _mm256_set1_ps(data);
     }
 
     static simd add(simd a, simd b) {
@@ -44,11 +48,15 @@ struct Simd<dtype_t::Float64> {
     static const size_t width = 4;
 
     static simd load(const double* data) {
-        return _mm256_load_pd(data);
+        return _mm256_loadu_pd(data);
     }
 
     static void store(double* data, simd reg) {
-        _mm256_store_pd(data, reg);
+        _mm256_storeu_pd(data, reg);
+    }
+
+    static simd set(Data data) { 
+        return _mm256_set1_pd(data);
     }
 
     static simd add(simd a, simd b) {
@@ -75,11 +83,15 @@ struct Simd<dtype_t::Int32> {
     static const size_t width = 8;
 
     static simd load(const Data* data) {
-        return _mm256_load_si256((const __m256i*)data);
+        return _mm256_loadu_si256((const __m256i*)data);
     }
 
     static void store(Data* data, simd reg) {
-        _mm256_store_si256((simd*)data, reg);
+        _mm256_storeu_si256((simd*)data, reg);
+    }
+
+    static simd set(Data elem) { 
+        return _mm256_set1_epi32(elem);
     }
 
     static simd add(simd a, simd b) {

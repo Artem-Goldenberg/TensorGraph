@@ -10,6 +10,9 @@ class Tensor final : public DeviceTensor {
 public:
     Tensor(const TensorParams& params, const void* data);
 
+    template <typename Data>
+    Tensor(Data elem, const TensorParams& params);
+
     TensorRef copy() const override;
 
     void add(const DeviceTensor& other) override;
@@ -22,6 +25,8 @@ public:
     TensorRef matmul(const DeviceTensor& other) const override;
     TensorRef transpose() const override;
 
+    void clear() override;
+
     template <typename Data>
     void flush(Data* out) const;
 
@@ -29,6 +34,8 @@ public:
     int get_block_size() const { return block_size; }
 
 private:
+    void compute_grid_sizes();
+
     int grid_size;
     int block_size;
 };

@@ -4,38 +4,84 @@
 #include "utils.h"
 #include "device-tensor.h"
 #include "tensor.h"
+#include "omp.h"
 
 using namespace cpu;
 
-template<dtype_t tp>
-struct dtcopy {
-    using Data = Simd<tp>::Data;
+constexpr static size_t parallelization_threshold = 100;
 
+template <typename Data>
+struct dtcopy {
     static void call(Data* dst, const Data* src, size_t n) {
-        std::copy(src, src + n, dst);
-        // for (size_t i = 0; i < n; i += Simd<tp>::width) {
-        //     auto reg = Simd<tp>::load(src + i);
-        //     Simd<tp>::store(dst + i, reg);
-        // }
+        using Simd = Simd<unlift<Data>>;
+        using simd = Simd::simd;
+
+        constexpr size_t step = Simd::width;
+        size_t simd_end = (n / step) * step;
+
+        #pragma omp parallel for if (simd_end > parallelization_threshold)
+        for (size_t i = 0; i < simd_end / step; ++i) {
+            size_t offset = i * step;
+
+            simd reg = Simd::load(src + offset);
+            Simd::store(dst + offset, reg);
+        }
+
+        std::copy(src + simd_end, src + n, dst + simd_end);
+    }
+
+    static void set(Data* dst, Data eleme, size_t n) {
+        using Simd = Simd<unlift<Data>>;
+        using simd = Simd::simd;
+
+        constexpr size_t step = Simd::width;
+        size_t simd_end = (n / step) * step;
+
+        simd elem_reg = Simd::set(eleme);
+
+        #pragma omp parallel for if (simd_end > parallelization_threshold)
+        for (size_t i = 0; i < simd_end / step; ++i) {
+            size_t offset = i * step;
+            Simd::store(dst + offset, elem_reg);
+        }
+
+        std::fill(dst + simd_end, dst + n, eleme);
     }
 };
+
+static std::shared_ptr<void> allocate_aligned_memory(const TensorParams& params) {
+    void* raw = std::aligned_alloc(32, bytesize(params));
+    assert(raw);
+    return std::shared_ptr<void>(raw, std::free);
+}
 
 Tensor::Tensor(const TensorParams& params, const void* data): DeviceTensor(params) {
     check(params.device == device_t::CPU, "Tried to instantiate a CPU Tensor with GPU parameters");
 
     size_t n = params.shape.numel();
-    void* raw = std::aligned_alloc(32, n * size_of(params.dtype));
-
-    assert(raw);
-
-    this->data = std::shared_ptr<void>(raw, std::free);
+    this->data = allocate_aligned_memory(params);
 
     if (data)
         lift(params.dtype, [&]<dtype_t tp>() {
-            using Data = Simd<tp>::Data;
-            dtcopy<tp>::call((Data*)this->data.get(), (const Data*)data, n);
+            using Data = Info<tp>::Data;
+            dtcopy<Data>::call((Data*)this->data.get(), (const Data*)data, n);
         });
 }
+
+template<typename Data>
+Tensor::Tensor(Data elem, const TensorParams& params): DeviceTensor(params) {
+    check(params.device == device_t::CPU, "Tried to instantiate a CPU Tensor with GPU parameters");
+
+    size_t n = params.shape.numel();
+    this->data = allocate_aligned_memory(params);
+
+    dtcopy<Data>::set((Data*)this->data.get(), elem, n);
+}
+
+// Instantiate the constuctor above for all the data types needed
+#define InstantiateTemplates(tp, Data) \
+    template Tensor::Tensor<Data>(Data, const TensorParams&);
+ForEachDType(InstantiateTemplates)
 
 TensorRef Tensor::copy() const {
     assert(this->data);
@@ -54,9 +100,8 @@ TensorRef Tensor::sum() const {
 
         static const size_t step = Simd::width;
 
-        alignas(32) Data buffer[8] = {}; // zeroes
-
-        simd sum = Simd::load(buffer);
+        // simd sum = Simd::load(buffer);
+        simd sum = Simd::set(0);
 
         size_t n = params.shape.numel();
         size_t simd_end = n / step * step;
@@ -64,15 +109,19 @@ TensorRef Tensor::sum() const {
         // const Data* result->get_data<Data>();
         const Data* data = get_data<Data>();
 
-        for (size_t i = 0; i < simd_end; i += step) {
-            simd v = Simd::load(data + i);
+        for (size_t i = 0; i < simd_end / step; ++i) {
+            size_t offset = i * step;
+            simd v = Simd::load(data + offset);
             sum = Simd::add(sum, v);
         }
 
-        // store in buffer and add manually
+        // add the 8 elements manually
+        alignas(32) Data buffer[8] = {};
         Simd::store(buffer, sum);
-        Data total = buffer[0] + buffer[1] + buffer[2] + buffer[3] +
-                    buffer[4] + buffer[5] + buffer[6] + buffer[7];
+
+        Data total = 0;
+        for (size_t i = 0; i < step; ++i)
+            total += buffer[i];
 
         // remaining elements
         for (size_t i = simd_end; i < n; ++i)
@@ -104,6 +153,7 @@ TensorRef Tensor::matmul(const DeviceTensor& other) const {
 
         Data* result_data = result->get_mutable_data<Data>();
 
+        #pragma omp parallel for collapse(2) if (n * m > parallelization_threshold)
         for (size_t i = 0; i < n; ++i) {
             for (size_t j = 0; j < m; ++j) {
                 Data sum = 0;
@@ -132,6 +182,7 @@ TensorRef Tensor::transpose() const {
         const Data* data = this->get_data<Data>();
         Data* result_data = result->get_mutable_data<Data>();
 
+        #pragma omp parallel for collapse(2) if (n * m > parallelization_threshold)
         for (size_t i = 0; i < n; ++i)
             for (size_t j = 0; j < m; ++j)
                 result_data[j * n + i] = data[i * m + j];
@@ -160,14 +211,17 @@ static void bulk_operation(
 
     if constexpr (!std::is_same_v<SimdOp, nullptr_t>) {
         simd_end = n / step * step; 
-        for (size_t i = 0; i < simd_end; i += step) {
-            auto reg1 = Simd::load(dst + i);
-            auto reg2 = Simd::load(src + i);
+        #pragma omp parallel for if (simd_end > parallelization_threshold)
+        for (size_t i = 0; i < simd_end / step; ++i) {
+            size_t offset = i * step;
+            auto reg1 = Simd::load(dst + offset);
+            auto reg2 = Simd::load(src + offset);
             auto res = simd_op(reg1, reg2);
-            Simd::store(dst + i, res);
+            Simd::store(dst + offset, res);
         }
     }
 
+    #pragma omp parallel for if (n - simd_end > parallelization_threshold)
     for (size_t i = simd_end; i < n; ++i)
         dst[i] = scalar_op(dst[i], src[i]);
 }
@@ -207,5 +261,15 @@ void Tensor::divide(const DeviceTensor& other) {
             bulk_operation<tp>(*this, other, Scalar<tp>::divide, nullptr);
         else
             bulk_operation<tp>(*this, other, Scalar<tp>::divide, Simd<tp>::divide);
+    });
+}
+
+void Tensor::clear() {
+    lift(params.dtype, [&]<dtype_t tp>() {
+        using Data = Info<tp>::Data;
+
+        Data* dst = get_mutable_data<Data>();
+
+        dtcopy<Data>::set(dst, (Data)0, params.shape.numel());
     });
 }

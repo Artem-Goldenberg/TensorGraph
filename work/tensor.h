@@ -37,6 +37,8 @@ public:
     Tensor matmul(const Tensor& other) const;
     Tensor transpose() const;
 
+    void clear();
+
     Tensor& operator += (const Tensor& other);
     Tensor& operator -= (const Tensor& other);
     Tensor& operator *= (const Tensor& other);

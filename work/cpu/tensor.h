@@ -9,6 +9,9 @@ namespace cpu {
 class Tensor final : public DeviceTensor {
 public:
     Tensor(const TensorParams& params, const void* data);
+    
+    template <typename Data>
+    Tensor(Data elem, const TensorParams& params);
 
     TensorRef copy() const override;
 
@@ -21,6 +24,8 @@ public:
 
     TensorRef matmul(const DeviceTensor& other) const override;
     TensorRef transpose() const override;
+
+    void clear() override;
 };
 
 }

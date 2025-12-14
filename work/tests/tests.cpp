@@ -77,6 +77,9 @@ TEMPLATE_TEST_CASE("copying", "[copy]", int, float, double) {
     device_t device = GENERATE(device_t::CPU, device_t::GPU);
     Shape shape = GENERATE(Shapes);
 
+    CAPTURE(shape.get_dims());
+    CAPTURE(device);
+
     auto [data, to_free] = make_test_data<Data>(seed, shape.numel());
 
     Tensor a = Tensor::from_blob<Data>(
@@ -88,6 +91,48 @@ TEMPLATE_TEST_CASE("copying", "[copy]", int, float, double) {
 
     vector<Data> vec = vector<Data>(data, data + shape.numel());
     equals(vec, b.get_data<Data>());
+
+    delete[] data;
+    delete[] to_free;
+}
+
+TEMPLATE_TEST_CASE("filling", "[fill]", int, float, double) {
+    using Data = TestType;
+
+    device_t device = GENERATE(device_t::CPU, device_t::GPU);
+    Shape shape = GENERATE(Shapes);
+
+    CAPTURE(shape.get_dims());
+    CAPTURE(device);
+
+    Tensor a = Tensor::fill((Data)0, {.shape = shape, .device = device, .dtype = unlift<Data>});
+    a = a.to(device_t::CPU);
+
+    vector<Data> vec = vector(shape.numel(), (Data)0);
+
+    equals(vec, a.get_data<Data>());
+}
+
+TEMPLATE_TEST_CASE("clearing", "[clear]", int, float, double) {
+    using Data = TestType;
+
+    device_t device = GENERATE(device_t::CPU, device_t::GPU);
+    Shape shape = GENERATE(Shapes);
+
+    CAPTURE(shape.get_dims());
+    CAPTURE(device);
+
+    auto [data, to_free] = make_test_data<Data>(seed, shape.numel());
+
+    Tensor a = Tensor::from_blob<Data>(
+        data, {.shape = shape, .device = device, .dtype = unlift<Data>}
+    );
+
+    a.clear();
+    a = a.to(device_t::CPU);
+
+    vector<Data> vec = vector(shape.numel(), (Data)0);
+    equals(vec, a.get_data<Data>());
 
     delete[] data;
     delete[] to_free;

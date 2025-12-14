@@ -1,5 +1,6 @@
 #include <benchmark/benchmark.h>
 
+#include "omp.h"
 #include "benchmarks/utils.h"
 #include "../utils.h"
 
@@ -20,24 +21,35 @@ inline void range(benchmark::internal::Benchmark* b) {
 }
 
 static const vector<size_t> problems[] = {
-    {2, 2, 2, 2},
+    {16, 16},
+    {2048, 128},
+    {128, 2048},
+    {2048, 1024, 3},
+    {1024, 16, 1024},
+    {16, 2048, 2048},
+    {101, 107, 103, 105}
+};
+
+static const vector<size_t> matmul_problems[] = {
+    {16, 32, 16},
     {1024, 1024, 3},
-    {1024, 1024}
+    {1024, 1024, 1024},
+    {1024, 1024, 2048},
+    {1007, 1003, 2047}
 };
 
 constexpr size_t n_problems = sizeof(problems) / sizeof(problems[0]);
 
 template <typename Data>
-static void copy(benchmark::State& state) {
+static void copy(benchmark::State& state, device_t device = device_t::CPU) {
     int64_t i = state.range(0);
     Shape shape = Shape(problems[i]);
 
     auto [a_data, b_data] = make_test_data<Data>(seed, shape.numel());
 
-    Tensor a = Tensor::from_blob(a_data, {.shape = shape, .dtype = unlift<Data>});
-    // Tensor b = Tensor::from_blob(b_data, {.shape = shape, .dtype = unlift<Data>});
-
-    // std::vector<Data> result(N, 0);
+    Tensor a = Tensor::from_blob(
+        a_data, {.shape = shape, .device = device, .dtype = unlift<Data>}
+    );
 
     for (auto _ : state) {
         Tensor throwaway = a.copy();
@@ -46,11 +58,29 @@ static void copy(benchmark::State& state) {
     }
 }
 
-static const vector<size_t> matmul_problems[] = {
-    {1024, 1024, 3},
-    {1024, 1024, 1024},
-    {1024, 1024, 2048}
-};
+template <typename Data>
+static void serial_copy(benchmark::State& state) {
+    omp_set_dynamic(0);
+    omp_set_num_threads(1);
+    copy<Data>(state);
+}
+
+template <typename Data>
+static void parallel_copy(benchmark::State& state) {
+    omp_set_dynamic(0);
+    omp_set_num_threads(omp_get_num_procs());
+
+    // Warm up the threads
+    #pragma omp parallel
+    {}
+
+    copy<Data>(state);
+}
+
+template <typename Data>
+static void gpu_copy(benchmark::State& state) {
+    copy<Data>(state, device_t::GPU);
+}
 
 constexpr size_t n_matmul_problems = sizeof(matmul_problems) / sizeof(matmul_problems[0]);
 
@@ -93,7 +123,21 @@ static void matmul(benchmark::State& state, device_t device) {
 }
 
 template <typename Data>
-static void cpu_matmul(benchmark::State& state) {
+static void cpu_serial_matmul(benchmark::State& state) {
+    omp_set_dynamic(0);
+    omp_set_num_threads(1);
+    matmul<Data>(state, device_t::CPU);
+}
+
+template <typename Data>
+static void cpu_parallel_matmul(benchmark::State& state) {
+    omp_set_dynamic(0);
+    omp_set_num_threads(omp_get_num_procs());
+
+    // Warm up the threads
+    #pragma omp parallel
+    {}
+
     matmul<Data>(state, device_t::CPU);
 }
 
@@ -106,15 +150,32 @@ static void gpu_matmul(benchmark::State& state) {
 // subtraction, multiplication, division
 // matrix multiplication
 
-#define CopyBenchmark(tp, T) \
-    BENCHMARK_TEMPLATE1(copy, T) \
+#define SerialCopyBenchmark(tp, T) \
+    BENCHMARK_TEMPLATE1(serial_copy, T) \
         ->Apply(range<n_problems>) \
         ->Unit(benchmark::kMicrosecond);
 
-ForEachDType(CopyBenchmark)
+#define ParallelCopyBenchmark(tp, T) \
+    BENCHMARK_TEMPLATE1(parallel_copy, T) \
+        ->Apply(range<n_problems>) \
+        ->Unit(benchmark::kMicrosecond);
 
-#define CPUMatmulBenchmark(tp, T) \
-    BENCHMARK_TEMPLATE1(cpu_matmul, T) \
+#define GPUCopyBenchmark(tp, T) \
+    BENCHMARK_TEMPLATE1(gpu_copy, T) \
+        ->Apply(range<n_problems>) \
+        ->Unit(benchmark::kMicrosecond);
+
+ForEachDType(SerialCopyBenchmark)
+ForEachDType(ParallelCopyBenchmark)
+ForEachDType(GPUCopyBenchmark)
+
+#define CPUSerialMatmulBenchmark(tp, T) \
+    BENCHMARK_TEMPLATE1(cpu_serial_matmul, T) \
+        ->Apply(range<n_matmul_problems>) \
+        ->Unit(benchmark::kMicrosecond);
+
+#define CPUParallelMatmulBenchmark(tp, T) \
+    BENCHMARK_TEMPLATE1(cpu_parallel_matmul, T) \
         ->Apply(range<n_matmul_problems>) \
         ->Unit(benchmark::kMicrosecond);
 
@@ -123,7 +184,8 @@ ForEachDType(CopyBenchmark)
         ->Apply(range<n_matmul_problems>) \
         ->Unit(benchmark::kMicrosecond);
 
-ForEachDType(CPUMatmulBenchmark)
+ForEachDType(CPUSerialMatmulBenchmark)
+ForEachDType(CPUParallelMatmulBenchmark)
 ForEachDType(GPUMatmulBenchmark)
 
 // BENCHMARK_TEMPLATE1(addition, float)

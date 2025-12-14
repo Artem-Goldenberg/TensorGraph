@@ -7,36 +7,43 @@
 
 using namespace std;
 
+void dprint(const Tensor& tensor) {
+    std::cout << tensor.to(device_t::CPU) << std::endl;
+}
 
 int main() { 
     using Data = int;
 
-    size_t m = 16;
-    size_t n = 32;
+    device_t device = device_t::GPU;
 
-    // float* data_x{nullptr};
-    // float* data_y{nullptr};
-
-    auto [data_x, data_y] = make_test_data<Data>(107, n * m);
-
-    Tensor x_t = Tensor::from_blob(
-        data_x, { .shape = {m, n}, .device = device_t::GPU, .dtype = unlift<Data> }
+    Tensor x_t = Tensor::from_values(
+        {1, 2, 3, 4}, 
+        {.shape = {2, 2}, .device = device, .dtype = unlift<Data>}
     );
 
-    Tensor y_t = Tensor::from_blob(
-        data_y, { .shape = {m, n}, .device = device_t::GPU, .dtype = unlift<Data> }
+    Tensor y_t = Tensor::from_values(
+        {1, 2, 3, 4}, 
+        {.shape = {2, 2}, .device = device, .dtype = unlift<Data>}
     );
-    
-    Variable x(x_t);     // graph node
-    Variable y(y_t);     // graph node
 
-    Variable z = x * y;      // calculation graph
+    VariableRef x = Variable::from(x_t);     // graph node
+    VariableRef y = Variable::from(y_t);     // graph node
 
-    z.cpu();             // if there is no sum implementation for GPU
-    z.sum().backward();  // gradients calculation
+    VariableRef z = x->matmul(y);      // calculation graph
 
-    cout << x.grad() << endl;
-    cout << y.grad() << endl;
+    VariableRef sum = z->sum();
+    sum->backward();  // gradients calculation
+
+    sum->cpu();
+
+    cout << "Final value:" << endl;
+    cout << sum->activation() << endl;
+
+    cout << "X gradient:" << endl;
+    cout << x->grad().to(device_t::CPU) << endl;
+
+    cout << "Y gradient:" << endl;
+    cout << y->grad().to(device_t::CPU) << endl;
 
     // vector<Data>
 

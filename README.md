@@ -17,3 +17,4 @@ cmake ..
 cmake --build .
   ```
   * Проверка проходит в окружении описанном в следующем [Dockerfile](https://git.hse-shift.ru/ml-platform-arch/practice/-/blob/main/docker/Dockerfile).
+
