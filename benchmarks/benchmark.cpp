@@ -1,8 +1,8 @@
 #include <benchmark/benchmark.h>
 
 #include "omp.h"
-#include "benchmarks/utils.h"
-#include "../utils.h"
+#include "bench_utils.h"
+#include "utils.h"
 
 #include <iostream>
 

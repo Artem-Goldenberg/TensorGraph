@@ -1,9 +1,10 @@
+// Builds a tiny computation graph on the GPU, runs a backward pass, and
+// prints the result and the gradients.
 #include <iostream>
-// #include <torch/torch.h>
 
 #include "tensor.h"
+#include "utils.h"
 #include "graph/variable.h"
-#include "tests/utils.h"
 
 using namespace std;
 
@@ -44,20 +45,6 @@ int main() {
 
     cout << "Y gradient:" << endl;
     cout << y->grad().to(device_t::CPU) << endl;
-
-    // vector<Data>
-
-    // Compare with LibTorch
-    // torch::Tensor x_torch = torch::from_blob(data_x, { (long)m, (long)n }, torch::kFloat32);
-    // torch::Tensor y_torch = torch::from_blob(data_y, { (long)m, (long)n }, torch::kFloat32);
-
-    // torch::Tensor z_torch = x_torch * y_torch;
-    // torch::Tensor grad = torch::ones_like(z_torch); // gradient for sum
-
-    // z_torch.backward(grad);
-
-    // std::cout << "LibTorch gradients:\n";
-    // std::cout << x_torch.grad() << std::endl;
 
     return 0;
 }

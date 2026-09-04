@@ -1,6 +1,6 @@
 #include "tensor.h"
-#include "../utils.h"
-#include "tests/utils.h"
+#include "utils.h"
+#include "test_utils.h"
 
 template <typename Data>
 static std::tuple<Tensor, Matrix<Data>> matrix_test_data(const Shape& shape, device_t device) {

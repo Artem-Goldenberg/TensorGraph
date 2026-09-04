@@ -1,6 +1,6 @@
 #include "tensor.h"
-#include "../utils.h"
-#include "tests/utils.h"
+#include "utils.h"
+#include "test_utils.h"
 
 #include "graph/variable.h"
 

@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <catch2/catch_all.hpp>
 
-#include "benchmarks/utils.h"
+#include "benchmarks/bench_utils.h"
 
 constexpr size_t seed = 42;
 
